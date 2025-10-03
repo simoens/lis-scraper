@@ -1,1 +1,50 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="refresh" content="60"> <title>LIS Wijzigingen</title>
+    <style>
+        body { font-family: sans-serif; margin: 2em; background-color: #f4f4f9; color: #333; }
+        .container { max-width: 1200px; margin: auto; background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h1, h2 { color: #0056b3; border-bottom: 2px solid #ddd; padding-bottom: 10px; }
+        .update-time { font-style: italic; color: #666; }
+        .wijziging { border: 1px solid #ccc; border-radius: 5px; padding: 15px; margin-bottom: 20px; background-color: #fafafa; }
+        pre { white-space: pre-wrap; word-wrap: break-word; background-color: #eee; padding: 10px; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Live LIS Wijzigingen</h1>
+        <p class="update-time">Laatste controle: {{ laatste_update }}</p>
 
+        {% if not data %}
+            <p>Momenteel geen wijzigingen gevonden die voldoen aan de filters.</p>
+        {% else %}
+            {% if data.UITGAAND %}
+                <h2>Uitgaande Schepen</h2>
+                {% for item in data.UITGAAND %}
+                    <div class="wijziging"><pre>{{ item }}</pre></div>
+                {% endfor %}
+            {% endif %}
+            {% if data.INKOMEND %}
+                <h2>Inkomende Schepen</h2>
+                {% for item in data.INKOMEND %}
+                    <div class="wijziging"><pre>{{ item }}</pre></div>
+                {% endfor %}
+            {% endif %}
+            {% if data.SHIFTING %}
+                <h2>Shifting Schepen</h2>
+                {% for item in data.SHIFTING %}
+                    <div class="wijziging"><pre>{{ item }}</pre></div>
+                {% endfor %}
+            {% endif %}
+            {% if data.ALGEMEEN %}
+                <h2>Algemene Wijzigingen</h2>
+                {% for item in data.ALGEMEEN %}
+                    <div class="wijziging"><pre>{{ item }}</pre></div>
+                {% endfor %}
+            {% endif %}
+        {% endif %}
+    </div>
+</body>
+</html>
