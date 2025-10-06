@@ -125,11 +125,29 @@ def filter_dubbele_schepen(bestellingen_lijst):
         if schip_naam:
             schip_naam_gekuist = re.sub(r'\s*\(d\)\s*$', '', schip_naam).strip()
             schepen_gegroepeerd[schip_naam_gekuist].append(bestelling)
+    
     gefilterde_lijst = []
     nu = datetime.now()
+
     for schip_naam_gekuist, dubbele_bestellingen in schepen_gegroepeerd.items():
         if len(dubbele_bestellingen) == 1:
             gefilterde_lijst.append(dubbele_bestellingen[0])
             continue
+
         toekomstige_orders = []
-        for bestelling in dubbele_bestellingen
+        # HIER IS DE FIX: De ':' is toegevoegd aan het einde van de volgende regel
+        for bestelling in dubbele_bestellingen:
+            try:
+                besteltijd_str = bestelling.get("Besteltijd")
+                if besteltijd_str:
+                    parsed_tijd = datetime.strptime(besteltijd_str, "%d/%m/%y %H:%M")
+                    if parsed_tijd >= nu:
+                        toekomstige_orders.append((parsed_tijd, bestelling))
+            except (ValueError, TypeError):
+                continue
+        
+        if toekomstige_orders:
+            toekomstige_orders.sort(key=lambda x: x[0])
+            gefilterde_lijst.append(toekomstige_orders[0][1])
+            
+    return gefilterde_lijst
