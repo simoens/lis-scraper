@@ -9,7 +9,6 @@
         h1, h2, h3 { color: #0056b3; border-bottom: 2px solid #ddd; padding-bottom: 10px; }
         .update-time { font-style: italic; color: #666; }
         .status { padding: 10px; background-color: #e7f3fe; border-left: 5px solid #2196F3; margin-bottom: 1em; }
-        .wijziging { border: 1px solid #ccc; border-radius: 5px; padding: 15px; margin-bottom: 20px; background-color: #fafafa; }
         pre { white-space: pre-wrap; word-wrap: break-word; background-color: #eee; padding: 10px; border-radius: 5px; }
         table { width: 100%; border-collapse: collapse; margin-bottom: 2em; }
         th, td { text-align: left; padding: 8px; border-bottom: 1px solid #ddd; }
@@ -19,92 +18,63 @@
 <body>
     <div class="container">
         <h1>Live LIS Wijzigingen</h1>
-        <p class="status">Status: <strong>{{ status }}</strong></p>
-        <p class="update-time">Laatste data van: {{ laatste_update }}</p>
+        <p class="status">Status: <strong>{{ scraper_status }}</strong></p>
+        <p class="update-time">Laatste check: {{ laatste_update }}</p>
 
         <div id="content">
-            {% if data %}
+            {% if wijzigingen_data %}
                 <h2>Gevonden Wijzigingen</h2>
-                {% if data.UITGAAND %}
-                    <h3>Gewijzigde Uitgaande Schepen</h3>
-                    {% for item in data.UITGAAND %}
-                        <div class="wijziging"><pre>{{ item }}</pre></div>
+                {% for type, items in wijzigingen_data.items() %}
+                    <h3>{{ type }}</h3>
+                    {% for item in items %}
+                        <pre>{{ item }}</pre>
                     {% endfor %}
-                {% endif %}
-                {% if data.INKOMEND %}
-                    <h3>Gewijzigde Inkomende Schepen</h3>
-                    {% for item in data.INKOMEND %}
-                        <div class="wijziging"><pre>{{ item }}</pre></div>
-                    {% endfor %}
-                {% endif %}
-                {% if data.SHIFTING %}
-                    <h3>Gewijzigde Shifting Schepen</h3>
-                    {% for item in data.SHIFTING %}
-                        <div class="wijziging"><pre>{{ item }}</pre></div>
-                    {% endfor %}
-                {% endif %}
-                 {% if data.ALGEMEEN %}
-                    <h3>Algemene Wijzigingen</h3>
-                    {% for item in data.ALGEMEEN %}
-                        <div class="wijziging"><pre>{{ item }}</pre></div>
-                    {% endfor %}
-                {% endif %}
-
-            {% elif initial_snapshot %}
+                {% endfor %}
+            {% elif initiële_schepen_data %}
                 <h2>Initieel Overzicht</h2>
                 <h3>Inkomende Schepen (-8u tot +8u)</h3>
-                {% if initial_snapshot.INKOMEND %}
+                {% if initiële_schepen_data.INKOMEND %}
                     <table>
                         <thead><tr><th>Schip</th><th>Besteltijd</th><th>Entry Point</th><th>Loods</th></tr></thead>
                         <tbody>
-                            {% for schip in initial_snapshot.INKOMEND %}
+                        {% for schip in initiële_schepen_data.INKOMEND %}
                             <tr><td>{{ schip.Schip }}</td><td>{{ schip.Besteltijd }}</td><td>{{ schip.EntryPoint }}</td><td>{{ schip.Loods }}</td></tr>
-                            {% endfor %}
+                        {% endfor %}
                         </tbody>
                     </table>
                 {% else %}
                     <p>Geen inkomende schepen gevonden die aan de criteria voldoen.</p>
                 {% endif %}
                 <h3>Uitgaande Schepen (komende 16u)</h3>
-                {% if initial_snapshot.UITGAAND %}
+                {% if initiële_schepen_data.UITGAAND %}
                     <table>
-                        <thead><tr><th>Schip</th><th>Besteltijd</th><th>Entry Point</th><th>Loods</th></tr></thead>
+                         <thead><tr><th>Schip</th><th>Besteltijd</th><th>Entry Point</th><th>Loods</th></tr></thead>
                         <tbody>
-                            {% for schip in initial_snapshot.UITGAAND %}
+                        {% for schip in initiële_schepen_data.UITGAAND %}
                             <tr><td>{{ schip.Schip }}</td><td>{{ schip.Besteltijd }}</td><td>{{ schip.EntryPoint }}</td><td>{{ schip.Loods }}</td></tr>
-                            {% endfor %}
+                        {% endfor %}
                         </tbody>
                     </table>
                 {% else %}
                     <p>Geen uitgaande schepen gevonden die aan de criteria voldoen.</p>
                 {% endif %}
-            
             {% else %}
-                <p>Momenteel geen wijzigingen of relevante schepen gevonden.</p>
+                <p>Data wordt geladen... Als dit bericht blijft staan, is het script nog aan het inloggen of zijn er geen relevante schepen gevonden.</p>
             {% endif %}
         </div>
     </div>
-
     <script>
-        let lastKnownTimestamp = {{ timestamp | default(0) }};
-        document.addEventListener('DOMContentLoaded', () => { if ('Notification' in window && Notification.permission !== 'granted') { Notification.requestPermission(); } });
-        function showNotification(title, body) { if ('Notification' in window && Notification.permission === 'granted') { new Notification(title, { body: body }); } }
+        let lastKnownTimestamp = {{ laatste_update_timestamp | default(0) }};
         setInterval(async () => {
             try {
                 const response = await fetch('/api/updates');
-                if (!response.ok) { console.error('API request failed:', response.status); return; }
+                if (!response.ok) return;
                 const updates = await response.json();
-                if (updates.timestamp > lastKnownTimestamp) {
+                if (updates.laatste_update_timestamp > lastKnownTimestamp) {
                     console.log('Nieuwe data gedetecteerd, pagina herladen.');
-                    lastKnownTimestamp = updates.timestamp;
-                    if (Object.keys(updates.data).length > 0) {
-                        showNotification('Nieuwe LIS Wijziging!', 'Er zijn updates gevonden in de loodsbestellingen.');
-                    }
                     location.reload();
-                } else {
-                    console.log('Geen nieuwe data, volgende check over 60s.');
                 }
-            } catch (error) { console.error('Fout bij het ophalen van updates:', error); }
+            } catch (error) { console.error('Fout bij ophalen updates:', error); }
         }, 60000);
     </script>
 </body>
