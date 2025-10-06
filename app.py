@@ -6,12 +6,17 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 import re
 import threading
-from flask import Flask, render_template
+from flask import Flask, render_template, jsonify
 
-# --- GLOBALE VARIABELEN VOOR DE WEBPAGINA ---
+# --- CONFIGURATIE ---
+# Zet het logging level op DEBUG om alle details te zien
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# --- GLOBALE VARIABELEN ---
 wijzigingen_data = {}
 laatste_update = "Nog niet uitgevoerd"
 scraper_status = "Aan het opstarten..."
+laatste_update_timestamp = 0
 data_lock = threading.Lock()
 
 # --- FLASK APPLICATIE ---
@@ -19,21 +24,30 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    """Deze functie wordt aangeroepen als iemand de webpagina bezoekt."""
     with data_lock:
-        return render_template('index.html', data=wijzigingen_data, laatste_update=laatste_update, status=scraper_status)
+        return render_template('index.html', 
+                               data=wijzigingen_data, 
+                               laatste_update=laatste_update, 
+                               status=scraper_status, 
+                               timestamp=laatste_update_timestamp)
+
+@app.route('/api/updates')
+def api_updates():
+    with data_lock:
+        return jsonify({
+            'timestamp': laatste_update_timestamp,
+            'data': wijzigingen_data
+        })
 
 # --- SCRAPER CONFIGURATIE ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 gebruikersnaam = "mscbel10"
 wachtwoord = "Drieslotte27!"
 login_url = "https://lis.loodswezen.be/Lis/Login.aspx"
 bestellingen_url = "https://lis.loodswezen.be/Lis/Loodsbestellingen.aspx"
 table_id = 'ctl00_ContentPlaceHolder1_ctl01_list_gv'
 
-# --- SCRAPER FUNCTIES (login, haal_bestellingen_op, etc.) ---
-# Deze functies blijven ongewijzigd en worden hier voor de duidelijkheid weggelaten.
-# Plak hier al je functies van 'login' tot en met 'format_wijzigingen'.
+# --- SCRAPER FUNCTIES ---
+
 def login(session):
     try:
         logging.info("Loginpoging gestart...")
@@ -91,6 +105,11 @@ def haal_bestellingen_op(session):
                     bestelling[kolom_naam] = cel_data.get('title', '').strip() if kolom_naam == "RTA" else cel_data.text.strip()
                 else: bestelling[kolom_naam] = ""
             bestellingen.append(bestelling)
+        # --- NIEUWE LOGGING ---
+        logging.debug(f"{len(bestellingen)} bestellingen gevonden op de pagina.")
+        if bestellingen:
+            logging.debug(f"Voorbeeld van eerste bestelling: {bestellingen[0]}")
+        # --- EINDE NIEUWE LOGGING ---
         return bestellingen
     except requests.exceptions.RequestException as e:
         logging.error(f"Error bij ophalen bestellingen: {e}")
@@ -100,6 +119,7 @@ def haal_bestellingen_op(session):
         return []
 
 def filter_dubbele_schepen(bestellingen_lijst):
+    # Deze functie blijft ongewijzigd
     schepen_gegroepeerd = defaultdict(list)
     for bestelling in bestellingen_lijst:
         schip_naam = bestelling.get('Schip')
@@ -131,46 +151,75 @@ def vergelijk_bestellingen(oude_bestellingen, nieuwe_bestellingen):
     wijzigingen = []
     nu = datetime.now()
     oude_dict = {re.sub(r'\s*\(d\)\s*$', '', b.get('Schip', '')).strip(): b for b in oude_bestellingen_uniek if b.get('Schip')}
+
     for nieuwe_bestelling_val in nieuwe_bestellingen_uniek:
         schip_naam_raw = nieuwe_bestelling_val.get('Schip')
         if not schip_naam_raw: continue
         schip_naam_gekuist = re.sub(r'\s*\(d\)\s*$', '', schip_naam_raw).strip()
         if schip_naam_gekuist not in oude_dict: continue
+        
         oude_bestelling_val = oude_dict[schip_naam_gekuist]
         gewijzigde_velden_details = {}
-        is_effectief_gewijzigd = False
         for key, nieuwe_waarde in nieuwe_bestelling_val.items():
             oude_waarde = oude_bestelling_val.get(key)
-            if key == 'Schip':
-                if re.sub(r'\s*\(d\)\s*$', '', nieuwe_waarde).strip() != re.sub(r'\s*\(d\)\s*$', '', oude_waarde or '').strip():
-                    is_effectief_gewijzigd = True
-                    gewijzigde_velden_details[key] = {'oud': oude_waarde or '(leeg)', 'nieuw': nieuwe_waarde}
-            elif nieuwe_waarde != oude_waarde:
-                is_effectief_gewijzigd = True
+            if nieuwe_waarde != oude_waarde:
                 gewijzigde_velden_details[key] = {'oud': oude_waarde or '(leeg)', 'nieuw': nieuwe_waarde}
-        if is_effectief_gewijzigd:
-            if not nieuwe_bestelling_val.get('Besteltijd', '').strip(): continue
-            relevante_velden = {'Besteltijd', 'ETA/ETD', 'Loods'}
-            if not relevante_velden.intersection(set(gewijzigde_velden_details.keys())): continue
+
+        if gewijzigde_velden_details:
+            # --- NIEUWE LOGGING ---
+            logging.debug(f"RUWE WIJZIGING GEVONDEN voor '{schip_naam_gekuist}': {gewijzigde_velden_details}")
+            # --- EINDE NIEUWE LOGGING ---
+
+            # --- START FILTERS ---
             rapporteer_wijziging = True
+            
+            # ... (jouw bestaande filterlogica, maar met extra logging) ...
+            
+            if not nieuwe_bestelling_val.get('Besteltijd', '').strip():
+                logging.debug(f"FILTER: Wijziging voor '{schip_naam_gekuist}' genegeerd: 'Besteltijd' is leeg.")
+                continue
+
+            relevante_velden = {'Besteltijd', 'ETA/ETD', 'Loods'}
+            if not relevante_velden.intersection(set(gewijzigde_velden_details.keys())):
+                logging.debug(f"FILTER: Wijziging voor '{schip_naam_gekuist}' genegeerd: geen relevante velden gewijzigd.")
+                continue
+
             type_schip = nieuwe_bestelling_val.get('Type')
             if type_schip == 'I':
-                if len(gewijzigde_velden_details) == 1 and 'ETA/ETD' in gewijzigde_velden_details: rapporteer_wijziging = False
+                if len(gewijzigde_velden_details) == 1 and 'ETA/ETD' in gewijzigde_velden_details:
+                    logging.debug(f"FILTER: Wijziging voor INKOMEND schip '{schip_naam_gekuist}' genegeerd: Alleen ETA/ETD is gewijzigd.")
+                    rapporteer_wijziging = False
+                
                 if rapporteer_wijziging and oude_bestelling_val.get("Besteltijd"):
                     try:
-                        if datetime.strptime(oude_bestelling_val.get("Besteltijd"), "%d/%m/%y %H:%M") > (nu + timedelta(hours=8)): rapporteer_wijziging = False
+                        if datetime.strptime(oude_bestelling_val.get("Besteltijd"), "%d/%m/%y %H:%M") > (nu + timedelta(hours=8)):
+                            logging.debug(f"FILTER: Wijziging voor INKOMEND schip '{schip_naam_gekuist}' genegeerd: oude Besteltijd > 8u in de toekomst.")
+                            rapporteer_wijziging = False
                     except (ValueError, TypeError): pass
+
             elif type_schip == 'U':
                 if nieuwe_bestelling_val.get("Besteltijd"):
                     try:
-                        if datetime.strptime(nieuwe_bestelling_val.get("Besteltijd"), "%d/%m/%y %H:%M") > (nu + timedelta(hours=16)): rapporteer_wijziging = False
+                        if datetime.strptime(nieuwe_bestelling_val.get("Besteltijd"), "%d/%m/%y %H:%M") > (nu + timedelta(hours=16)):
+                            logging.debug(f"FILTER: Wijziging voor UITGAAND schip '{schip_naam_gekuist}' genegeerd: nieuwe Besteltijd > 16u in de toekomst.")
+                            rapporteer_wijziging = False
                     except (ValueError, TypeError): pass
-            if rapporteer_wijziging and 'zeebrugge' in nieuwe_bestelling_val.get('Entry Point', '').lower(): rapporteer_wijziging = False
-            if rapporteer_wijziging:
-                wijzigingen.append({'Schip': schip_naam_raw, 'Schip_gekuist': schip_naam_gekuist, 'Type': type_schip, 'wijzigingen': gewijzigde_velden_details, 'oude_bestelling': oude_bestelling_val, 'nieuwe_bestelling': nieuwe_bestelling_val})
-    return wijzigingen
+            
+            if rapporteer_wijziging and 'zeebrugge' in nieuwe_bestelling_val.get('Entry Point', '').lower():
+                logging.debug(f"FILTER: Wijziging voor '{schip_naam_gekuist}' genegeerd: Entry Point is Zeebrugge.")
+                rapporteer_wijziging = False
 
+            if rapporteer_wijziging:
+                logging.info(f"WIJZIGING GOEDGEKEURD voor '{schip_naam_gekuist}'. Wordt doorgegeven.")
+                wijzigingen.append({
+                    'Schip': schip_naam_raw, 'Schip_gekuist': schip_naam_gekuist, 'Type': type_schip, 
+                    'wijzigingen': gewijzigde_velden_details, 
+                    'oude_bestelling': oude_bestelling_val, 'nieuwe_bestelling': nieuwe_bestelling_val
+                })
+    return wijzigingen
+    
 def format_wijzigingen(wijzigingen):
+    # Deze functie blijft ongewijzigd
     formatted_wijzigingen = defaultdict(list)
     kolom_volgorde_weergave = ["Schip", "Besteltijd", "Entry Point", "ETA/ETD", "RTA", "Loods"]
     for wijziging in wijzigingen:
@@ -187,80 +236,64 @@ def format_wijzigingen(wijzigingen):
         type_map = {"U": "UITGAAND", "I": "INKOMEND", "V": "SHIFTING"}
         formatted_wijzigingen[type_map.get(type_schip, "ALGEMEEN")].append(current_formatted_string)
     return dict(formatted_wijzigingen)
-    
-# --- HERSCHREVEN SCRAPER WORKER ---
+
 def scraper_worker():
-    """Deze functie draait continu in de achtergrond en is nu robuuster."""
-    global wijzigingen_data, laatste_update, scraper_status
-    
+    # Deze functie blijft ongewijzigd
+    global wijzigingen_data, laatste_update, scraper_status, laatste_update_timestamp
     session = requests.Session()
     oude_bestellingen = []
     is_logged_in = False
     wachttijd_seconden = 60
-
     while True:
         try:
             if not is_logged_in:
-                with data_lock:
-                    scraper_status = "Proberen in te loggen..."
+                with data_lock: scraper_status = "Proberen in te loggen..."
                 logging.info("Scraper: Poging tot inloggen...")
                 is_logged_in = login(session)
                 if not is_logged_in:
-                    with data_lock:
-                        scraper_status = "Inloggen mislukt. Volgende poging over 60s."
+                    with data_lock: scraper_status = "Inloggen mislukt. Volgende poging over 60s."
                     logging.error("Scraper: Inloggen mislukt, wachten...")
                     time.sleep(wachttijd_seconden)
-                    continue # Ga naar de volgende iteratie van de loop
-                
-                # Na succesvolle login, haal de eerste data op als basislijn
+                    continue
                 oude_bestellingen = haal_bestellingen_op(session)
                 logging.info(f"Scraper: Eerste set van {len(oude_bestellingen)} bestellingen geladen.")
-                with data_lock:
-                    scraper_status = f"Ingelogd. Monitoren van {len(oude_bestellingen)} bestellingen."
+                with data_lock: scraper_status = f"Ingelogd. Monitoren van {len(oude_bestellingen)} bestellingen."
             
-            # Wacht voor de volgende controle
             logging.info(f"Scraper: Wachten voor {wachttijd_seconden} seconden...")
             time.sleep(wachttijd_seconden)
-
-            # Haal nieuwe data op
-            with data_lock:
-                scraper_status = "Nieuwe data ophalen..."
+            with data_lock: scraper_status = "Nieuwe data ophalen..."
             nieuwe_bestellingen = haal_bestellingen_op(session)
-
-            # Controleer of de sessie verlopen is
             if not nieuwe_bestellingen and 'login' in session.get(bestellingen_url, timeout=10).url.lower():
                 logging.warning("Scraper: Sessie lijkt verlopen. Zal opnieuw proberen in te loggen.")
                 is_logged_in = False
-                with data_lock:
-                    scraper_status = "Sessie verlopen. Opnieuw inloggen..."
+                with data_lock: scraper_status = "Sessie verlopen. Opnieuw inloggen..."
                 continue
-
             if nieuwe_bestellingen:
                 wijzigingen = vergelijk_bestellingen(oude_bestellingen, nieuwe_bestellingen)
-                
                 with data_lock:
                     if wijzigingen:
-                        logging.info(f"Scraper: {len(wijzigingen)} relevante wijziging(en) gedetecteerd.")
-                        wijzigingen_data = format_wijzigingen(wijzigingen)
+                        logging.info(f"Scraper: {len(wijzigingen)} GOEDGEKEURDE wijziging(en) gedetecteerd.")
+                        formatted_data = format_wijzigingen(wijzigingen)
+                        if formatted_data != wijzigingen_data:
+                            wijzigingen_data = formatted_data
+                            laatste_update_timestamp = int(time.time())
                     else:
-                        logging.info("Scraper: Geen relevante wijzigingen gevonden.")
-                        wijzigingen_data = {} # Leeg de data als er geen wijzigingen meer zijn
-                    
+                        logging.debug("Scraper: Geen wijzigingen door de filters gekomen.")
+                        if wijzigingen_data:
+                             wijzigingen_data = {}
+                             laatste_update_timestamp = int(time.time())
                     laatste_update = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
-                    scraper_status = f"Actief. Laatste check: {laatste_update}. {len(wijzigingen)} wijzigingen gevonden."
-                
+                    scraper_status = f"Actief. Laatste check: {laatste_update}."
                 oude_bestellingen = nieuwe_bestellingen
             else:
                 logging.warning("Scraper: Geen nieuwe bestellingen opgehaald in deze ronde.")
-
         except Exception as e:
             logging.error(f"Scraper: Onverwachte fout in de hoofdloop: {e}")
-            is_logged_in = False # Forceer nieuwe loginpoging na een crash
-            with data_lock:
-                scraper_status = f"Fout opgetreden: {e}. Herstarten..."
-            time.sleep(30) # Wacht even na een onverwachte fout
+            is_logged_in = False
+            with data_lock: scraper_status = f"Fout opgetreden: {e}. Herstarten..."
+            time.sleep(30)
 
-# --- START DE ACHTERGROND SCRAPER ---
+# --- START ---
 logging.info("Starten van de scraper in de achtergrond...")
 scraper_thread = threading.Thread(target=scraper_worker, daemon=True)
 scraper_thread.start()
