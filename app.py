@@ -243,7 +243,7 @@ def filter_initiële_schepen(bestellingen):
 
 # --- AANGEPASTE SCRAPER WORKER ---
 def scraper_worker():
-    """Draait continu in de achtergrond."""
+    """Draait continu in de achtergrond met verbeterde statuslogica."""
     global wijzigingen_data, laatste_update, scraper_status, laatste_update_timestamp, initiële_schepen_data
     
     session = requests.Session()
@@ -254,50 +254,62 @@ def scraper_worker():
     while True:
         try:
             if not is_logged_in:
-                # ... (inloglogica blijft hetzelfde) ...
-                with data_lock: scraper_status = "Proberen in te loggen..."
+                with data_lock:
+                    scraper_status = "Proberen in te loggen..."
                 logging.info("Scraper: Poging tot inloggen...")
                 is_logged_in = login(session)
                 if not is_logged_in:
-                    with data_lock: scraper_status = "Inloggen mislukt. Volgende poging over 60s."
+                    with data_lock:
+                        scraper_status = "Inloggen mislukt. Volgende poging over 60s."
                     logging.error("Scraper: Inloggen mislukt, wachten...")
                     time.sleep(wachttijd_seconden)
                     continue
                 
-                # AANGEPAST: Genereer de initiële snapshot na de eerste login
                 oude_bestellingen = haal_bestellingen_op(session)
                 logging.info(f"Scraper: Eerste set van {len(oude_bestellingen)} bestellingen geladen.")
                 with data_lock:
                     initiële_schepen_data = filter_initiële_schepen(oude_bestellingen)
-                    logging.info(f"Scraper: Initiële snapshot gemaakt. {len(initiële_schepen_data['INKOMEND'])} inkomend, {len(initiële_schepen_data['UITGAAND'])} uitgaand.")
+                    logging.info(f"Scraper: Initiële snapshot gemaakt. {len(initiële_schepen_data.get('INKOMEND', []))} inkomend, {len(initiële_schepen_data.get('UITGAAND', []))} uitgaand.")
                     scraper_status = f"Ingelogd. Monitoren van {len(oude_bestellingen)} bestellingen."
 
-            # ... (de rest van de while-loop blijft ongewijzigd) ...
             logging.info(f"Scraper: Wachten voor {wachttijd_seconden} seconden...")
             time.sleep(wachttijd_seconden)
-            with data_lock: scraper_status = "Nieuwe data ophalen..."
+            with data_lock:
+                scraper_status = "Nieuwe data ophalen..."
             nieuwe_bestellingen = haal_bestellingen_op(session)
+
             if not nieuwe_bestellingen and 'login' in session.get(bestellingen_url, timeout=10).url.lower():
                 logging.warning("Scraper: Sessie lijkt verlopen. Zal opnieuw proberen in te loggen.")
                 is_logged_in = False
-                with data_lock: scraper_status = "Sessie verlopen. Opnieuw inloggen..."
+                with data_lock:
+                    scraper_status = "Sessie verlopen. Opnieuw inloggen..."
                 continue
+
             if nieuwe_bestellingen:
                 wijzigingen = vergelijk_bestellingen(oude_bestellingen, nieuwe_bestellingen)
                 with data_lock:
                     if wijzigingen:
+                        # --- DE BELANGRIJKSTE WIJZIGING IS HIER ---
+                        # Zodra de eerste wijziging binnenkomt, verwijderen we de start-tabel.
+                        if initiële_schepen_data is not None:
+                            logging.info("Eerste wijziging gedetecteerd, de initiële snapshot wordt nu verborgen.")
+                            initiële_schepen_data = None
+                        # --- EINDE WIJZIGING ---
+
                         logging.info(f"Scraper: {len(wijzigingen)} GOEDGEKEURDE wijziging(en) gedetecteerd.")
                         formatted_data = format_wijzigingen(wijzigingen)
                         if formatted_data != wijzigingen_data:
                             wijzigingen_data = formatted_data
                             laatste_update_timestamp = int(time.time())
                     else:
-                        logging.debug("Scraper: Geen wijzigingen door de filters gekomen.")
-                        if wijzigingen_data:
+                        logging.info("Scraper: Geen wijzigingen door de filters gekomen.")
+                        if wijzigingen_data: # Maak leeg als er voorheen wel wijzigingen waren
                              wijzigingen_data = {}
                              laatste_update_timestamp = int(time.time())
+                             
                     laatste_update = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
                     scraper_status = f"Actief. Laatste check: {laatste_update}."
+                
                 oude_bestellingen = nieuwe_bestellingen
             else:
                 logging.warning("Scraper: Geen nieuwe bestellingen opgehaald in deze ronde.")
@@ -305,7 +317,8 @@ def scraper_worker():
         except Exception as e:
             logging.error(f"Scraper: Onverwachte fout in de hoofdloop: {e}")
             is_logged_in = False
-            with data_lock: scraper_status = f"Fout opgetreden: {e}. Herstarten..."
+            with data_lock:
+                scraper_status = f"Fout opgetreden: {e}. Herstarten..."
             time.sleep(30)
 
 # --- START ---
