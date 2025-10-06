@@ -23,52 +23,7 @@
         <p class="update-time">Laatste data van: {{ laatste_update }}</p>
 
         <div id="content">
-            {% if initial_snapshot and not data %}
-                <h2>Initieel Overzicht</h2>
-                
-                <h3>Inkomende Schepen (-8u tot +8u)</h3>
-                {% if initial_snapshot.INKOMEND %}
-                    <table>
-                        <thead>
-                            <tr><th>Schip</th><th>Besteltijd</th><th>Entry Point</th><th>Loods</th></tr>
-                        </thead>
-                        <tbody>
-                            {% for schip in initial_snapshot.INKOMEND %}
-                            <tr>
-                                <td>{{ schip.Schip }}</td>
-                                <td>{{ schip.Besteltijd }}</td>
-                                <td>{{ schip.EntryPoint }}</td>
-                                <td>{{ schip.Loods }}</td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                {% else %}
-                    <p>Geen inkomende schepen gevonden die aan de criteria voldoen.</p>
-                {% endif %}
-
-                <h3>Uitgaande Schepen (komende 16u)</h3>
-                {% if initial_snapshot.UITGAAND %}
-                    <table>
-                        <thead>
-                            <tr><th>Schip</th><th>Besteltijd</th><th>Entry Point</th><th>Loods</th></tr>
-                        </thead>
-                        <tbody>
-                            {% for schip in initial_snapshot.UITGAAND %}
-                            <tr>
-                                <td>{{ schip.Schip }}</td>
-                                <td>{{ schip.Besteltijd }}</td>
-                                <td>{{ schip.EntryPoint }}</td>
-                                <td>{{ schip.Loods }}</td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                {% else %}
-                    <p>Geen uitgaande schepen gevonden die aan de criteria voldoen.</p>
-                {% endif %}
-            
-            {% elif data %}
+            {% if data %}
                 <h2>Gevonden Wijzigingen</h2>
                 {% if data.UITGAAND %}
                     <h3>Gewijzigde Uitgaande Schepen</h3>
@@ -95,6 +50,35 @@
                     {% endfor %}
                 {% endif %}
 
+            {% elif initial_snapshot %}
+                <h2>Initieel Overzicht</h2>
+                <h3>Inkomende Schepen (-8u tot +8u)</h3>
+                {% if initial_snapshot.INKOMEND %}
+                    <table>
+                        <thead><tr><th>Schip</th><th>Besteltijd</th><th>Entry Point</th><th>Loods</th></tr></thead>
+                        <tbody>
+                            {% for schip in initial_snapshot.INKOMEND %}
+                            <tr><td>{{ schip.Schip }}</td><td>{{ schip.Besteltijd }}</td><td>{{ schip.EntryPoint }}</td><td>{{ schip.Loods }}</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                {% else %}
+                    <p>Geen inkomende schepen gevonden die aan de criteria voldoen.</p>
+                {% endif %}
+                <h3>Uitgaande Schepen (komende 16u)</h3>
+                {% if initial_snapshot.UITGAAND %}
+                    <table>
+                        <thead><tr><th>Schip</th><th>Besteltijd</th><th>Entry Point</th><th>Loods</th></tr></thead>
+                        <tbody>
+                            {% for schip in initial_snapshot.UITGAAND %}
+                            <tr><td>{{ schip.Schip }}</td><td>{{ schip.Besteltijd }}</td><td>{{ schip.EntryPoint }}</td><td>{{ schip.Loods }}</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                {% else %}
+                    <p>Geen uitgaande schepen gevonden die aan de criteria voldoen.</p>
+                {% endif %}
+            
             {% else %}
                 <p>Momenteel geen wijzigingen of relevante schepen gevonden.</p>
             {% endif %}
@@ -103,32 +87,16 @@
 
     <script>
         let lastKnownTimestamp = {{ timestamp | default(0) }};
-
-        document.addEventListener('DOMContentLoaded', () => {
-            if ('Notification' in window && Notification.permission !== 'granted') {
-                Notification.requestPermission();
-            }
-        });
-
-        function showNotification(title, body) {
-            if ('Notification' in window && Notification.permission === 'granted') {
-                new Notification(title, { body: body });
-            }
-        }
-
+        document.addEventListener('DOMContentLoaded', () => { if ('Notification' in window && Notification.permission !== 'granted') { Notification.requestPermission(); } });
+        function showNotification(title, body) { if ('Notification' in window && Notification.permission === 'granted') { new Notification(title, { body: body }); } }
         setInterval(async () => {
             try {
                 const response = await fetch('/api/updates');
-                if (!response.ok) {
-                    console.error('API request failed with status:', response.status);
-                    return;
-                }
+                if (!response.ok) { console.error('API request failed:', response.status); return; }
                 const updates = await response.json();
-
                 if (updates.timestamp > lastKnownTimestamp) {
                     console.log('Nieuwe data gedetecteerd, pagina herladen.');
                     lastKnownTimestamp = updates.timestamp;
-                    
                     if (Object.keys(updates.data).length > 0) {
                         showNotification('Nieuwe LIS Wijziging!', 'Er zijn updates gevonden in de loodsbestellingen.');
                     }
@@ -136,10 +104,8 @@
                 } else {
                     console.log('Geen nieuwe data, volgende check over 60s.');
                 }
-            } catch (error) {
-                console.error('Fout bij het ophalen van updates:', error);
-            }
-        }, 60000); // 60000 milliseconden = 60 seconden
+            } catch (error) { console.error('Fout bij het ophalen van updates:', error); }
+        }, 60000);
     </script>
 </body>
 </html>
