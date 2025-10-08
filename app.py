@@ -8,11 +8,13 @@ import re
 import threading
 from flask import Flask, render_template, jsonify
 import os
+import psutil # NIEUW: voor geheugenmeting
 
 # --- CONFIGURATIE ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- GLOBALE STATE DICTIONARY ---
+# ... (deze sectie blijft ongewijzigd) ...
 app_state = {
     "wijzigingen_data": {}, "initiële_schepen_data": None,
     "laatste_update": "Nog niet uitgevoerd", "scraper_status": "Aan het opstarten...",
@@ -20,37 +22,35 @@ app_state = {
 }
 data_lock = threading.Lock()
 
-# --- FLASK APPLICATIE ---
-app = Flask(__name__)
 
+# --- FLASK APPLICATIE (blijft ongewijzigd) ---
+app = Flask(__name__)
 @app.route('/')
 def home():
-    with data_lock:
-        return render_template('index.html', **app_state)
-
+    with data_lock: return render_template('index.html', **app_state)
 @app.route('/api/updates')
 def api_updates():
-    with data_lock:
-        return jsonify(app_state)
+    with data_lock: return jsonify(app_state)
 
-# --- SCRAPER CONFIGURATIE ---
+# --- SCRAPER CONFIGURATIE (blijft ongewijzigd) ---
 gebruikersnaam = os.environ.get('LIS_USER')
 wachtwoord = os.environ.get('LIS_PASS')
 login_url = "https://lis.loodswezen.be/Lis/Login.aspx"
 bestellingen_url = "https://lis.loodswezen.be/Lis/Loodsbestellingen.aspx"
 table_id = 'ctl00_ContentPlaceHolder1_ctl01_list_gv'
-
 if not gebruikersnaam or not wachtwoord:
     logging.critical("FATALE FOUT: LIS_USER of LIS_PASS niet ingesteld!")
 
-# --- SCRAPER FUNCTIES (ongewijzigd) ---
+# --- SCRAPER FUNCTIES ---
+
 def login(session):
+    # ... (deze functie blijft ongewijzigd) ...
     try:
         logging.info("Loginpoging gestart...")
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"}
         get_response = session.get(login_url, headers=headers)
         get_response.raise_for_status()
-        soup = BeautifulSoup(get_response.text, 'html.parser')
+        soup = BeautifulSoup(get_response.text, 'lxml') # Gebruik lxml hier ook voor de zekerheid
         viewstate = soup.find('input', {'name': '__VIEWSTATE'})
         viewstategenerator = soup.find('input', {'name': '__VIEWSTATEGENERATOR'})
         if not viewstate: return False
@@ -69,13 +69,23 @@ def login(session):
         logging.error(f"Fout tijdens login: {e}")
         return False
 
+# --- AANGEPASTE haal_bestellingen_op FUNCTIE ---
 def haal_bestellingen_op(session):
     try:
         response = session.get(bestellingen_url)
         response.raise_for_status()
-        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # WIJZIGING 1: Gebruik 'lxml' als parser, dit is geheugen-efficiënter
+        soup = BeautifulSoup(response.content, 'lxml')
+        
+        # WIJZIGING 2: Meet en log het geheugengebruik op het piekmoment
+        process = psutil.Process(os.getpid())
+        mem_usage_mb = process.memory_info().rss / 1024 ** 2
+        logging.info(f"---[GEHEUGENCHECK]--- Huidig geheugengebruik: {mem_usage_mb:.2f} MB")
+        
         table = soup.find('table', id=table_id)
         if table is None: return []
+        
         kolom_indices = {"Type": 0, "Besteltijd": 5, "ETA/ETD": 6, "RTA": 7, "Loods": 10, "Schip": 11, "Entry Point": 20}
         bestellingen = []
         for row in table.find_all('tr')[1:]:
@@ -88,6 +98,7 @@ def haal_bestellingen_op(session):
         logging.error(f"Error bij ophalen bestellingen: {e}")
         return []
 
+# ... (de rest van de functies: filter_dubbele_schepen, vergelijk_bestellingen, etc. blijven ONGEWIJZIGD) ...
 def filter_dubbele_schepen(bestellingen_lijst):
     schepen_gegroepeerd = defaultdict(list)
     for bestelling in bestellingen_lijst:
@@ -164,26 +175,18 @@ def filter_initiële_schepen(bestellingen):
         except (ValueError, TypeError): continue
     return gefilterd
 
-# --- FINALE, ROBUUSTE SCRAPER WORKER ---
 def scraper_worker():
+    # ... (deze functie blijft ongewijzigd) ...
     global app_state
-    
-    # Wacht 5 seconden om de webserver de tijd te geven om volledig op te starten.
-    logging.info("Scraper thread gestart, wachten voor 5 seconden...")
     time.sleep(5)
-    
     session = requests.Session()
     oude_bestellingen = []
     is_logged_in = False
-    
     while True:
         try:
             if not is_logged_in:
-                with data_lock:
-                    app_state["scraper_status"] = "Proberen in te loggen..."
-                
+                with data_lock: app_state["scraper_status"] = "Proberen in te loggen..."
                 is_logged_in = login(session)
-
                 if is_logged_in:
                     oude_bestellingen = haal_bestellingen_op(session)
                     with data_lock:
@@ -194,40 +197,32 @@ def scraper_worker():
                         app_state["laatste_update"] = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
                         app_state["laatste_update_timestamp"] = int(time.time())
                 else:
-                    with data_lock:
-                        app_state["scraper_status"] = "Inloggen mislukt. Volgende poging over 60s."
+                    with data_lock: app_state["scraper_status"] = "Inloggen mislukt. Volgende poging over 60s."
                     time.sleep(60)
                     continue
-
             time.sleep(60)
             nieuwe_bestellingen = haal_bestellingen_op(session)
-
             if not nieuwe_bestellingen:
                 is_logged_in = False
                 with data_lock: app_state["scraper_status"] = "Data ophalen mislukt, sessie verlopen. Herstarten..."
                 continue
-
             wijzigingen = vergelijk_bestellingen(oude_bestellingen, nieuwe_bestellingen)
-            
             with data_lock:
                 if wijzigingen:
-                    if app_state["initiële_schepen_data"] is not None:
-                        app_state["initiële_schepen_data"] = None
+                    if app_state["initiële_schepen_data"] is not None: app_state["initiële_schepen_data"] = None
                     app_state["wijzigingen_data"] = format_wijzigingen(wijzigingen)
                     app_state["scraper_status"] = f"{len(wijzigingen)} nieuwe wijziging(en) gevonden."
                 else:
                     app_state["scraper_status"] = "Actief, geen nieuwe wijzigingen gevonden."
-                
                 app_state["laatste_update"] = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
                 app_state["laatste_update_timestamp"] = int(time.time())
-
             oude_bestellingen = nieuwe_bestellingen
-
         except Exception as e:
             logging.error(f"FATALE FOUT in scraper_worker: {e}")
             is_logged_in = False
             with data_lock: app_state["scraper_status"] = "Ernstige fout opgetreden, herstarten..."
             time.sleep(30)
+
 
 # --- START ---
 scraper_thread = threading.Thread(target=scraper_worker, daemon=True)
