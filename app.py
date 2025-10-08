@@ -175,18 +175,25 @@ def filter_initiële_schepen(bestellingen):
         except (ValueError, TypeError): continue
     return gefilterd
 
+# --- LAATSTE POGING: SCRAPER WORKER MET KORTERE SLAAP-INTERVALLEN ---
 def scraper_worker():
-    # ... (deze functie blijft ongewijzigd) ...
     global app_state
+    
+    # Wacht 5 seconden om de webserver de tijd te geven om volledig op te starten.
+    logging.info("Scraper thread gestart, wachten voor 5 seconden...")
     time.sleep(5)
+    
     session = requests.Session()
     oude_bestellingen = []
     is_logged_in = False
+    
     while True:
         try:
             if not is_logged_in:
+                # Eerste keer inloggen en data ophalen
                 with data_lock: app_state["scraper_status"] = "Proberen in te loggen..."
                 is_logged_in = login(session)
+
                 if is_logged_in:
                     oude_bestellingen = haal_bestellingen_op(session)
                     with data_lock:
@@ -200,13 +207,23 @@ def scraper_worker():
                     with data_lock: app_state["scraper_status"] = "Inloggen mislukt. Volgende poging over 60s."
                     time.sleep(60)
                     continue
-            time.sleep(60)
+
+            # --- DE WIJZIGING IS HIER ---
+            # Wacht 60 seconden in stappen van 10 om 'actief' te lijken
+            logging.info("Scraper wacht 60 seconden (in stappen)...")
+            for i in range(6):
+                time.sleep(10)
+            # --- EINDE WIJZIGING ---
+
             nieuwe_bestellingen = haal_bestellingen_op(session)
+
             if not nieuwe_bestellingen:
                 is_logged_in = False
                 with data_lock: app_state["scraper_status"] = "Data ophalen mislukt, sessie verlopen. Herstarten..."
                 continue
+
             wijzigingen = vergelijk_bestellingen(oude_bestellingen, nieuwe_bestellingen)
+            
             with data_lock:
                 if wijzigingen:
                     if app_state["initiële_schepen_data"] is not None: app_state["initiële_schepen_data"] = None
@@ -214,9 +231,12 @@ def scraper_worker():
                     app_state["scraper_status"] = f"{len(wijzigingen)} nieuwe wijziging(en) gevonden."
                 else:
                     app_state["scraper_status"] = "Actief, geen nieuwe wijzigingen gevonden."
+                
                 app_state["laatste_update"] = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
                 app_state["laatste_update_timestamp"] = int(time.time())
+
             oude_bestellingen = nieuwe_bestellingen
+
         except Exception as e:
             logging.error(f"FATALE FOUT in scraper_worker: {e}")
             is_logged_in = False
