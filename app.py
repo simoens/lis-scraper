@@ -13,28 +13,21 @@ import os
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- GLOBALE STATE DICTIONARY ---
-# We gebruiken één dictionary om alle gedeelde data bij te houden.
 app_state = {
-    "wijzigingen_data": {},
-    "initiële_schepen_data": None,
-    "laatste_update": "Nog niet uitgevoerd",
-    "scraper_status": "Aan het opstarten...",
+    "wijzigingen_data": {}, "initiële_schepen_data": None,
+    "laatste_update": "Nog niet uitgevoerd", "scraper_status": "Aan het opstarten...",
     "laatste_update_timestamp": 0
 }
 data_lock = threading.Lock()
 
 # --- FLASK APPLICATIE ---
 app = Flask(__name__)
-
 @app.route('/')
 def home():
-    with data_lock:
-        return render_template('index.html', **app_state)
-
+    with data_lock: return render_template('index.html', **app_state)
 @app.route('/api/updates')
 def api_updates():
-    with data_lock:
-        return jsonify(app_state)
+    with data_lock: return jsonify(app_state)
 
 # --- SCRAPER CONFIGURATIE ---
 gebruikersnaam = os.environ.get('LIS_USER')
@@ -42,11 +35,10 @@ wachtwoord = os.environ.get('LIS_PASS')
 login_url = "https://lis.loodswezen.be/Lis/Login.aspx"
 bestellingen_url = "https://lis.loodswezen.be/Lis/Loodsbestellingen.aspx"
 table_id = 'ctl00_ContentPlaceHolder1_ctl01_list_gv'
-
 if not gebruikersnaam or not wachtwoord:
-    logging.critical("FATALE FOUT: LIS_USER of LIS_PASS niet ingesteld in Render Environment Variables!")
+    logging.critical("FATALE FOUT: LIS_USER of LIS_PASS niet ingesteld!")
 
-# --- SCRAPER FUNCTIES (deze blijven ongewijzigd) ---
+# --- SCRAPER FUNCTIES (ongewijzigd) ---
 def login(session):
     try:
         logging.info("Loginpoging gestart...")
@@ -64,8 +56,9 @@ def login(session):
         login_response = session.post(login_url, data=form_data, headers=headers)
         login_response.raise_for_status()
         if "Login.aspx" not in login_response.url:
-            logging.info("Succesvol ingelogd!")
+            logging.info("LOGIN SUCCESVOL!")
             return True
+        logging.error("Login Mislukt (terug op loginpagina).")
         return False
     except Exception as e:
         logging.error(f"Fout tijdens login: {e}")
@@ -90,6 +83,7 @@ def haal_bestellingen_op(session):
         logging.error(f"Error bij ophalen bestellingen: {e}")
         return []
 
+# ... (Andere functies zoals filter_dubbele_schepen, vergelijk_bestellingen, etc. blijven hier ongewijzigd) ...
 def filter_dubbele_schepen(bestellingen_lijst):
     schepen_gegroepeerd = defaultdict(list)
     for bestelling in bestellingen_lijst:
@@ -166,29 +160,38 @@ def filter_initiële_schepen(bestellingen):
         except (ValueError, TypeError): continue
     return gefilterd
 
-# --- DEFINITIEVE SCRAPER WORKER (MET FIX VOOR TIMING-PROBLEEM) ---
+# --- DIAGNOSTISCHE SCRAPER WORKER ---
 def scraper_worker():
     global app_state
     session = requests.Session()
     oude_bestellingen = []
     is_logged_in = False
     
-    # Eerste statusupdate, zichtbaar bij de allereerste start
-    with data_lock:
-        app_state["scraper_status"] = "Proberen in te loggen..."
+    logging.info("---[DIAGNOSE]--- Scraper thread is gestart.")
 
     while True:
         try:
+            logging.info("---[DIAGNOSE]--- Nieuwe ronde in while-loop gestart.")
             if not is_logged_in:
-                # Stap 1: Doe het trage werk (inloggen, data ophalen) in lokale variabelen
-                login_gelukt = login(session)
+                with data_lock:
+                    app_state["scraper_status"] = "Proberen in te loggen..."
                 
+                logging.info("---[DIAGNOSE]--- Stap 1: login() wordt aangeroepen.")
+                login_gelukt = login(session)
+                logging.info(f"---[DIAGNOSE]--- Stap 2: login() is klaar. Resultaat: {login_gelukt}")
+
                 if login_gelukt:
+                    logging.info("---[DIAGNOSE]--- Stap 3: haal_bestellingen_op() wordt aangeroepen.")
                     oude_bestellingen = haal_bestellingen_op(session)
+                    logging.info(f"---[DIAGNOSE]--- Stap 4: {len(oude_bestellingen)} bestellingen opgehaald.")
+
+                    logging.info("---[DIAGNOSE]--- Stap 5: filter_initiële_schepen() wordt aangeroepen.")
                     snapshot_data = filter_initiële_schepen(oude_bestellingen)
+                    logging.info("---[DIAGNOSE]--- Stap 6: Initiële schepen gefilterd.")
+                    
                     is_logged_in = True
                     
-                    # Stap 2: Update de globale state in één snelle, atomaire actie
+                    logging.info("---[DIAGNOSE]--- Stap 7: Globale state wordt bijgewerkt...")
                     with data_lock:
                         app_state["initiële_schepen_data"] = snapshot_data
                         count_i = len(snapshot_data.get('INKOMEND', []))
@@ -196,40 +199,38 @@ def scraper_worker():
                         app_state["scraper_status"] = f"Ingelogd. Start-snapshot: {count_i} inkomend, {count_u} uitgaand."
                         app_state["laatste_update"] = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
                         app_state["laatste_update_timestamp"] = int(time.time())
+                    logging.info("---[DIAGNOSE]--- Stap 8: Globale state succesvol bijgewerkt.")
                 else:
                     with data_lock:
                         app_state["scraper_status"] = "Inloggen mislukt. Volgende poging over 60s."
                     time.sleep(60)
                     continue
 
-            # Vanaf hier start de normale loop voor wijzigingen
+            # Normale loop voor wijzigingen
+            logging.info("---[DIAGNOSE]--- Wachten voor volgende check...")
             time.sleep(60)
+            
+            # ... de rest van de loop blijft hetzelfde ...
             nieuwe_bestellingen = haal_bestellingen_op(session)
-
             if not nieuwe_bestellingen:
                 is_logged_in = False
                 with data_lock: app_state["scraper_status"] = "Data ophalen mislukt, sessie verlopen. Herstarten..."
                 continue
-
             wijzigingen = vergelijk_bestellingen(oude_bestellingen, nieuwe_bestellingen)
-            
             with data_lock:
                 if wijzigingen:
                     if app_state["initiële_schepen_data"] is not None:
-                        app_state["initiële_schepen_data"] = None # Verberg start-tabel
-                    
+                        app_state["initiële_schepen_data"] = None
                     app_state["wijzigingen_data"] = format_wijzigingen(wijzigingen)
                     app_state["scraper_status"] = f"{len(wijzigingen)} nieuwe wijziging(en) gevonden."
                 else:
                     app_state["scraper_status"] = "Actief, geen nieuwe wijzigingen gevonden."
-                
                 app_state["laatste_update"] = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
                 app_state["laatste_update_timestamp"] = int(time.time())
-
             oude_bestellingen = nieuwe_bestellingen
 
         except Exception as e:
-            logging.error(f"FATALE FOUT in scraper_worker: {e}")
+            logging.error(f"---[DIAGNOSE]--- FATALE FOUT in scraper_worker: {e}")
             is_logged_in = False
             with data_lock: app_state["scraper_status"] = "Ernstige fout opgetreden, herstarten..."
             time.sleep(30)
